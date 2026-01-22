@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ipsae-batch"
+version = "1.0.0"
+description = "Batch processing of protein structure predictions for interaction scoring and visualization"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "John Kourelis"}
+]
+keywords = [
+    "bioinformatics",
+    "protein structure",
+    "alphafold",
+    "colabfold",
+    "boltz2",
+    "interface analysis",
+    "ipsae",
+    "alphabridge"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+dependencies = [
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+    "pandas>=1.3.0",
+    "matplotlib>=3.5.0",
+    "seaborn>=0.11.0",
+    "pycirclize>=0.5.0",
+    "igraph>=0.10.0",
+    "networkx>=2.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+ipsae-batch = "ipsae_batch.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/JKourelis/ipSAE_batch"
+Documentation = "https://github.com/JKourelis/ipSAE_batch"
+Repository = "https://github.com/JKourelis/ipSAE_batch"
+
+[tool.setuptools.packages.find]
+include = ["ipsae_batch*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v"
