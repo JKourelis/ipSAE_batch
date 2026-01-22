@@ -1,5 +1,7 @@
 # ipSAE_batch
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/JKourelis/ipSAE_batch/blob/main/ipSAE_batch_colab.ipynb)
+
 Batch processing of protein structure predictions for interaction scoring and visualization.
 
 Combines **ipSAE** interaction metrics with visualization **inspired by AlphaBridge** for comprehensive analysis of predicted protein complexes from multiple structure prediction backends.
