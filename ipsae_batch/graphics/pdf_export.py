@@ -73,7 +73,7 @@ def generate_pae_page(
     _check_matplotlib()
 
     from .matrix_plot import (
-        _get_chain_boundaries, _expand_matrix_with_gaps
+        _get_chain_boundaries, _expand_matrix_with_gaps, _generate_matrix_ticks
     )
     from .config import get_config
     from matplotlib.patches import Rectangle
@@ -135,16 +135,36 @@ def generate_pae_page(
                 )
                 ax.add_patch(rect)
 
-        # Set chain labels at midpoints
-        midpoints = []
-        for ci in range(n_chains):
-            start = chain_boundaries[ci] + ci * gap_size
-            end = chain_boundaries[ci + 1] + ci * gap_size
-            midpoints.append((start + end) / 2)
-        ax.set_xticks(midpoints)
-        ax.set_xticklabels(chain_labels, fontsize=8)
-        ax.set_yticks(midpoints)
-        ax.set_yticklabels(chain_labels, fontsize=8)
+        # Generate tick positions and labels with amino acid numbering
+        # X-axis (top)
+        x_positions, x_labels, x_chain_starts = _generate_matrix_ticks(
+            chain_boundaries, chain_labels, gap_size, for_x_axis=True
+        )
+        # Y-axis (left)
+        y_positions, y_labels, y_chain_starts = _generate_matrix_ticks(
+            chain_boundaries, chain_labels, gap_size, for_x_axis=False
+        )
+
+        # X-axis ticks on TOP
+        ax.xaxis.set_ticks_position('top')
+        ax.xaxis.set_label_position('top')
+        ax.set_xticks(x_positions)
+        ax.set_xticklabels(x_labels, fontsize=7, rotation=90, ha='center')
+
+        # Y-axis ticks on LEFT
+        ax.yaxis.set_ticks_position('left')
+        ax.yaxis.set_label_position('left')
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels(y_labels, fontsize=7, rotation=0, ha='right')
+
+        # Make chain start labels bold
+        for idx in x_chain_starts:
+            ax.get_xticklabels()[idx].set_fontweight('bold')
+        for idx in y_chain_starts:
+            ax.get_yticklabels()[idx].set_fontweight('bold')
+
+        # Add padding between ticks and plot border
+        ax.tick_params(axis='both', which='major', pad=3, length=3)
 
         ax.set_title(f"Model {result.model_num}", fontsize=10)
 
