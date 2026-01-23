@@ -171,8 +171,9 @@ fig.savefig('ribbon.png', dpi=150)
 If you use this tool, please cite:
 
 ```
-Kourelis, J., et al. (2025). ipSAE_batch: Multi-backend batch processing
-for protein interface analysis. [Manuscript in preparation]
+Kourelis (2025). ipSAE_batch: Multi-backend batch processing
+for protein interface analysis. https://github.com/JKourelis/ipSAE_batch
+[Manuscript in preparation]
 
 Dunbrack, R. L. (2025). ipSAE: A score for confident satisfactory
 protein-protein interactions predicted by AlphaFold2 and AlphaFold3.
