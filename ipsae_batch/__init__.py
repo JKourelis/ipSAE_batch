@@ -17,7 +17,7 @@ Command-line interface:
 """
 
 __version__ = "1.0.0"
-__author__ = "John Kourelis"
+__author__ = "Jiorgos Kourelis"
 
 # Expose main classes and functions at package level
 from .data_readers import get_reader, list_backends, FoldingResult
