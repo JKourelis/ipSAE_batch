@@ -92,6 +92,21 @@ output_dir/
 └── ...
 ```
 
+<table>
+<tr>
+<td width="50%"><b>A) Joint Matrix Plot</b></td>
+<td width="50%"><b>B) Ribbon Diagram</b></td>
+</tr>
+<tr>
+<td><img src="images/example_model_matrix.png" width="100%"/></td>
+<td><img src="images/example_model_ribbon.png" width="100%"/></td>
+</tr>
+<tr>
+<td>Upper triangle: PMC (Predicted Merged Confidence) or contact probability. Lower triangle: PAE (Predicted Aligned Error). Chain boundaries shown with gaps; ticks indicate residue positions with chain labels (▼) marking N-terminus direction.</td>
+<td>Circular representation of protein chains with interface regions. Colored arcs indicate confident interface contacts; grey arcs show contacts below the PAE threshold. Arc thickness reflects contact confidence.</td>
+</tr>
+</table>
+
 ## Interaction Metrics
 
 | Metric | Description | Range | Quality |
