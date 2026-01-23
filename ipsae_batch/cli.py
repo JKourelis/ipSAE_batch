@@ -27,7 +27,7 @@ from typing import List, Dict, Tuple, Optional
 from multiprocessing import Pool, cpu_count
 
 # Import data readers (relative imports for package)
-from .data_readers import get_reader, list_backends, FoldingResult
+from .data_readers import get_reader, list_backends, FoldingResult, detect_backend_for_input_folder
 AVAILABLE_BACKENDS = list_backends()
 
 # Import core scoring module
@@ -51,7 +51,10 @@ try:
     import matplotlib.pyplot as plt
     from .graphics import plot_alphabridge_combined, plot_ribbon
     from .graphics.config import load_config_from_csv, set_config, get_config, GraphicsConfig
-    from .graphics.pdf_export import ModelPDFReport
+    from .graphics.pdf_export import (
+        ModelPDFReport, generate_combined_matrix_png,
+        generate_combined_pae_png, generate_combined_ribbon_png
+    )
     HAS_GRAPHICS = True
 except ImportError:
     pass
@@ -283,94 +286,29 @@ def process_batch(input_folder: str, pae_cutoff: float, dist_cutoff: float,
             write_per_contact_csv(folder_per_contact_results, per_contact_output)
             print(f"  Wrote: {per_contact_output}")
 
-        # Generate PNG graphics if requested
+        # Generate PNG graphics if requested (combined side-by-side for all models)
         if png and HAS_GRAPHICS:
             config = get_config()
+
+            # Pre-compute data for all models
+            precomputed_data = {}
+            folder_folding_results = []
+
             for model_num, (agg_res, contact_scores, folding_result) in model_results_map.items():
                 try:
-                    # Pre-compute data for graphics
-                    pmc = extract_pmc(folding_result)
-                    contact_probs = extract_contact_probs(folding_result)
-                    clusters = cluster_domains_from_result(folding_result)
-
-                    # Get interfaces using DISTANCE + PAE threshold
-                    # PAE threshold creates sparse matrix with natural gaps
-                    # Uses same PAE cutoff as calculations for consistency
-                    interfaces = get_geometric_interfaces(
-                        folding_result,
-                        distance_threshold=dist_cutoff,
-                        pae_threshold=pae_cutoff,  # Same as calculation cutoff
-                        gap_merge=config.interface.gap_merge
-                    )
-
-                    # Determine output paths
-                    if output_dir:
-                        matrix_path = os.path.join(output_dir, f"{job_name}_model{model_num}_matrix.png")
-                        ribbon_path = os.path.join(output_dir, f"{job_name}_model{model_num}_ribbon.png")
-                    else:
-                        matrix_path = os.path.join(folder, f"{job_name}_model{model_num}_matrix.png")
-                        ribbon_path = os.path.join(folder, f"{job_name}_model{model_num}_ribbon.png")
-
-                    # Generate matrix plot
-                    fig, ax = plot_alphabridge_combined(
-                        folding_result,
-                        pmc_matrix=pmc,
-                        contact_probs=contact_probs,
-                        clusters=clusters
-                    )
-                    fig.savefig(matrix_path, dpi=config.dpi, bbox_inches='tight')
-                    plt.close(fig)
-                    print(f"  Wrote: {matrix_path}")
-
-                    # Generate ribbon plot
-                    # Get proximity contacts (distance only) for visualization
-                    # These are ALL contacts, colored by PAE quality (grey for low confidence)
-                    proximity_contacts = get_proximity_contacts(
-                        folding_result,
-                        distance_threshold=dist_cutoff
-                    )
-
-                    fig = plot_ribbon(
-                        folding_result,
-                        interfaces=interfaces,
-                        proximity_contacts=proximity_contacts,
-                    )
-                    fig.savefig(ribbon_path, dpi=config.dpi, bbox_inches='tight')
-                    plt.close(fig)
-                    print(f"  Wrote: {ribbon_path}")
-
-                except Exception as e:
-                    print(f"  Warning: Failed to generate graphics for model {model_num}: {e}")
-
-        # Generate PDF report if requested
-        if pdf and HAS_GRAPHICS:
-            try:
-                config = get_config()
-
-                # Collect all folding results for this folder
-                folder_folding_results = []
-                precomputed_data = {}
-
-                for model_num, (agg_res, contact_scores, folding_result) in model_results_map.items():
                     folder_folding_results.append(folding_result)
 
-                    # Pre-compute graphics data
                     pmc = extract_pmc(folding_result)
                     contact_probs = extract_contact_probs(folding_result)
                     clusters = cluster_domains_from_result(folding_result)
 
-                    # Get interfaces using DISTANCE + PAE threshold
-                    # PAE threshold creates sparse matrix with natural gaps
-                    # Uses same PAE cutoff as calculations for consistency
                     interfaces = get_geometric_interfaces(
                         folding_result,
                         distance_threshold=dist_cutoff,
-                        pae_threshold=pae_cutoff,  # Same as calculation cutoff
+                        pae_threshold=pae_cutoff,
                         gap_merge=config.interface.gap_merge
                     )
 
-                    # Get proximity contacts (distance only) for visualization
-                    # Shows ALL contacts, colored by PAE quality (grey for low confidence)
                     proximity_contacts = get_proximity_contacts(
                         folding_result,
                         distance_threshold=dist_cutoff
@@ -384,9 +322,95 @@ def process_batch(input_folder: str, pae_cutoff: float, dist_cutoff: float,
                         'proximity_contacts': proximity_contacts,
                         'contact_scores': contact_scores,
                     }
+                except Exception as e:
+                    print(f"  Warning: Failed to precompute data for model {model_num}: {e}")
 
-                # Sort by model number
-                folder_folding_results.sort(key=lambda r: r.model_num)
+            # Sort by model number
+            folder_folding_results.sort(key=lambda r: r.model_num)
+
+            # Generate combined PNG outputs
+            try:
+                if output_dir:
+                    matrix_path = os.path.join(output_dir, f"{job_name}_matrices_combined.png")
+                    pae_path = os.path.join(output_dir, f"{job_name}_pae_combined.png")
+                    ribbon_path = os.path.join(output_dir, f"{job_name}_ribbons_combined.png")
+                else:
+                    matrix_path = os.path.join(folder, f"{job_name}_matrices_combined.png")
+                    pae_path = os.path.join(folder, f"{job_name}_pae_combined.png")
+                    ribbon_path = os.path.join(folder, f"{job_name}_ribbons_combined.png")
+
+                # Combined PMC/contact_prob matrices
+                generate_combined_matrix_png(
+                    folder_folding_results,
+                    matrix_path,
+                    precomputed_data=precomputed_data,
+                    dpi=config.dpi
+                )
+                print(f"  Wrote: {matrix_path}")
+
+                # Combined PAE matrices
+                generate_combined_pae_png(
+                    folder_folding_results,
+                    pae_path,
+                    dpi=config.dpi
+                )
+                print(f"  Wrote: {pae_path}")
+
+                # Combined ribbon plots with shared legend
+                generate_combined_ribbon_png(
+                    folder_folding_results,
+                    ribbon_path,
+                    precomputed_data=precomputed_data,
+                    dpi=config.dpi
+                )
+                print(f"  Wrote: {ribbon_path}")
+
+            except Exception as e:
+                print(f"  Warning: Failed to generate combined graphics: {e}")
+                import traceback
+                traceback.print_exc()
+
+        # Generate PDF report if requested
+        if pdf and HAS_GRAPHICS:
+            try:
+                config = get_config()
+
+                # Use precomputed data from PNG section if available, otherwise compute
+                if not png:
+                    # Need to compute precomputed_data (PNG section didn't run)
+                    precomputed_data = {}
+                    folder_folding_results = []
+
+                    for model_num, (agg_res, contact_scores, folding_result) in model_results_map.items():
+                        folder_folding_results.append(folding_result)
+
+                        pmc = extract_pmc(folding_result)
+                        contact_probs = extract_contact_probs(folding_result)
+                        clusters = cluster_domains_from_result(folding_result)
+
+                        interfaces = get_geometric_interfaces(
+                            folding_result,
+                            distance_threshold=dist_cutoff,
+                            pae_threshold=pae_cutoff,
+                            gap_merge=config.interface.gap_merge
+                        )
+
+                        proximity_contacts = get_proximity_contacts(
+                            folding_result,
+                            distance_threshold=dist_cutoff
+                        )
+
+                        precomputed_data[model_num] = {
+                            'pmc': pmc,
+                            'contact_probs': contact_probs,
+                            'clusters': clusters,
+                            'interfaces': interfaces,
+                            'proximity_contacts': proximity_contacts,
+                            'contact_scores': contact_scores,
+                        }
+
+                    folder_folding_results.sort(key=lambda r: r.model_num)
+                # else: reuse precomputed_data and folder_folding_results from PNG section
 
                 # Generate PDF
                 if output_dir:
@@ -485,9 +509,9 @@ Examples:
 
     parser.add_argument('input_folder',
                         help='Folder containing job output folders')
-    parser.add_argument('--backend', type=str, default='alphafold3',
-                        choices=AVAILABLE_BACKENDS,
-                        help=f'Structure prediction backend (default: alphafold3). Options: {backends_help}')
+    parser.add_argument('--backend', type=str, default='auto',
+                        choices=['auto'] + AVAILABLE_BACKENDS,
+                        help=f'Structure prediction backend (default: auto-detect). Options: auto, {backends_help}')
     parser.add_argument('--pae_cutoff', type=float, default=10.0,
                         help='PAE cutoff for ipSAE calculation (default: 10)')
     parser.add_argument('--dist_cutoff', type=float, default=10.0,
@@ -513,9 +537,23 @@ Examples:
         print(f"Error: {args.input_folder} is not a directory")
         sys.exit(1)
 
+    # Auto-detect backend if set to 'auto'
+    backend = args.backend
+    if backend == 'auto':
+        from pathlib import Path
+        detected = detect_backend_for_input_folder(Path(args.input_folder))
+        if detected:
+            backend = detected
+            print(f"Auto-detected backend: {backend}")
+        else:
+            print("Error: Could not auto-detect backend from file patterns.")
+            print("Please specify --backend manually.")
+            print(f"Available backends: {', '.join(AVAILABLE_BACKENDS)}")
+            sys.exit(1)
+
     print(f"ipSAE Batch Processor")
     print(f"=====================")
-    print(f"Backend: {args.backend}")
+    print(f"Backend: {backend}")
     print(f"Input folder: {args.input_folder}")
     print(f"PAE cutoff: {args.pae_cutoff}")
     print(f"Distance cutoff: {args.dist_cutoff}")
@@ -539,7 +577,7 @@ Examples:
         args.png,
         args.pdf,
         args.config,
-        args.backend
+        backend
     )
 
 

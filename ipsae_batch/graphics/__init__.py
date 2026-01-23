@@ -51,6 +51,11 @@ from .pdf_export import (
     generate_model_images,
     generate_combined_figure,
     generate_model_comparison_page,
+    generate_combined_matrix_png,
+    generate_combined_pae_png,
+    generate_combined_ribbon_png,
+    generate_pae_page,
+    generate_joint_matrix_page,
 )
 
 # Batch comparison (requires plotly)
@@ -100,6 +105,11 @@ __all__ = [
     'generate_model_images',
     'generate_combined_figure',
     'generate_model_comparison_page',
+    'generate_combined_matrix_png',
+    'generate_combined_pae_png',
+    'generate_combined_ribbon_png',
+    'generate_pae_page',
+    'generate_joint_matrix_page',
     # Batch comparison
     'HAS_BATCH_COMPARISON',
     'generate_batch_comparison_html',

@@ -684,6 +684,251 @@ def generate_matrix_grid(
     return fig
 
 
+def generate_combined_matrix_png(
+    results: List[FoldingResult],
+    output_path: str,
+    precomputed_data: Optional[Dict[int, Dict]] = None,
+    max_cols: int = 5,
+    dpi: int = 150,
+) -> None:
+    """
+    Generate a combined PNG with all PMC/contact_prob matrices side-by-side.
+
+    Args:
+        results: List of FoldingResult instances
+        output_path: Path to save PNG
+        precomputed_data: Dict mapping model_num -> precomputed data
+        max_cols: Maximum columns in grid
+        dpi: DPI for output image
+    """
+    fig = generate_joint_matrix_page(results, precomputed_data, max_cols)
+    if fig:
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+
+
+def generate_combined_pae_png(
+    results: List[FoldingResult],
+    output_path: str,
+    max_cols: int = 5,
+    dpi: int = 150,
+) -> None:
+    """
+    Generate a combined PNG with all PAE matrices side-by-side.
+
+    Args:
+        results: List of FoldingResult instances
+        output_path: Path to save PNG
+        max_cols: Maximum columns in grid
+        dpi: DPI for output image
+    """
+    fig = generate_pae_page(results, max_cols)
+    if fig:
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+
+
+def generate_combined_ribbon_png(
+    results: List[FoldingResult],
+    output_path: str,
+    precomputed_data: Optional[Dict[int, Dict]] = None,
+    max_cols: int = 5,
+    dpi: int = 150,
+) -> None:
+    """
+    Generate a combined PNG with all ribbon plots side-by-side with shared legend.
+
+    Since pycirclize creates polar-projection figures, we render each ribbon
+    to a temporary image and then combine them with a shared legend on the right.
+
+    Args:
+        results: List of FoldingResult instances
+        output_path: Path to save PNG
+        precomputed_data: Dict mapping model_num -> precomputed data
+        max_cols: Maximum columns in grid
+        dpi: DPI for output image
+    """
+    _check_matplotlib()
+
+    from .ribbon_plot import RibbonPlot, HAS_PYCIRCLIZE
+    from .config import get_config
+    from matplotlib.patches import Patch
+    from io import BytesIO
+    from PIL import Image
+    import io
+
+    if not HAS_PYCIRCLIZE:
+        return
+
+    if not results:
+        return
+
+    config = get_config()
+    precomputed = precomputed_data or {}
+
+    n_models = len(results)
+    n_rows, n_cols = _calculate_grid(n_models, max_cols)
+
+    # Render each ribbon plot to image buffer
+    ribbon_images = []
+    legend_handles = []
+    legend_labels = []
+    first_interfaces = None
+
+    for result in results:
+        model_data = precomputed.get(result.model_num, {})
+        interfaces = model_data.get('interfaces')
+        proximity_contacts = model_data.get('proximity_contacts')
+
+        try:
+            ribbon = RibbonPlot(result)
+            fig = ribbon.create_plot(
+                interfaces=interfaces,
+                proximity_contacts=proximity_contacts,
+                show_contacts=True,
+                link_alpha=config.ribbon.link_alpha,
+                figsize=(8, 8),
+            )
+
+            # Add model title at the top
+            fig.suptitle(f"Model {result.model_num}", fontsize=14, fontweight='bold', y=1.02)
+
+            # Save to buffer
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=dpi, bbox_inches='tight', facecolor='white')
+            buf.seek(0)
+            ribbon_images.append((result.model_num, buf))
+            plt.close(fig)
+
+            # Capture legend info from first model
+            if first_interfaces is None and interfaces:
+                first_interfaces = interfaces
+
+        except Exception as e:
+            # Create error placeholder
+            fig, ax = plt.subplots(figsize=(8, 8))
+            ax.axis('off')
+            ax.text(0.5, 0.5, f"Error: {e}", ha='center', va='center', fontsize=10)
+            fig.suptitle(f"Model {result.model_num}", fontsize=14, fontweight='bold', y=0.95)
+            buf = BytesIO()
+            fig.savefig(buf, format='png', dpi=dpi, bbox_inches='tight', facecolor='white')
+            buf.seek(0)
+            ribbon_images.append((result.model_num, buf))
+            plt.close(fig)
+
+    if not ribbon_images:
+        return
+
+    # Load images and get their sizes
+    try:
+        from PIL import Image
+        HAS_PIL = True
+    except ImportError:
+        HAS_PIL = False
+
+    if HAS_PIL:
+        # Use PIL to combine images efficiently
+        loaded_images = []
+        max_height = 0
+        total_width = 0
+        img_widths = []
+        img_heights = []
+
+        for model_num, buf in ribbon_images:
+            img = Image.open(buf)
+            loaded_images.append((model_num, img))
+            img_widths.append(img.width)
+            img_heights.append(img.height)
+            if img.height > max_height:
+                max_height = img.height
+
+        # Calculate grid layout
+        row_heights = []
+        row_widths = []
+
+        for row in range(n_rows):
+            row_imgs = loaded_images[row * n_cols:(row + 1) * n_cols]
+            if row_imgs:
+                row_heights.append(max(img.size[1] for _, img in row_imgs))
+                row_widths.append(sum(img.size[0] for _, img in row_imgs))
+
+        total_height = sum(row_heights) + 50  # 50px for title
+        total_width = max(row_widths) if row_widths else 800
+
+        # Add space for shared legend on the right
+        legend_width = 250
+        combined = Image.new('RGB', (total_width + legend_width, total_height), 'white')
+
+        # Paste images
+        y_offset = 50  # Start below title area
+        for row in range(n_rows):
+            row_imgs = loaded_images[row * n_cols:(row + 1) * n_cols]
+            x_offset = 0
+            row_max_height = row_heights[row] if row < len(row_heights) else 0
+
+            for model_num, img in row_imgs:
+                combined.paste(img, (x_offset, y_offset))
+                x_offset += img.width
+
+            y_offset += row_max_height
+
+        # Save combined image
+        combined.save(output_path, dpi=(dpi, dpi))
+
+    else:
+        # Fallback: use matplotlib to combine (lower quality)
+        fig = plt.figure(figsize=(5 * n_cols + 3, 5 * n_rows))
+        gs = GridSpec(n_rows, n_cols + 1, figure=fig, width_ratios=[1] * n_cols + [0.3],
+                      hspace=0.1, wspace=0.1)
+
+        for i, (model_num, buf) in enumerate(ribbon_images):
+            row = i // n_cols
+            col = i % n_cols
+            ax = fig.add_subplot(gs[row, col])
+            img_data = plt.imread(buf)
+            ax.imshow(img_data)
+            ax.set_title(f"Model {model_num}", fontsize=10)
+            ax.axis('off')
+
+        # Add shared legend in rightmost column
+        ax_legend = fig.add_subplot(gs[:, -1])
+        ax_legend.axis('off')
+
+        # Build legend elements
+        legend_elements = []
+
+        # pLDDT legend
+        legend_elements.append(Patch(facecolor='none', edgecolor='none', label='pLDDT (outer ring):'))
+        plddt_colors = ['#0053d6', '#65cbf3', '#ffdb13', '#ff7d45']
+        plddt_labels = ['>90 (very high)', '70-90 (high)', '50-70 (low)', '<50 (very low)']
+        for c, l in zip(plddt_colors, plddt_labels):
+            legend_elements.append(Patch(facecolor=c, edgecolor='black', linewidth=0.5, label=f'  {l}'))
+
+        # Interface colors from config
+        legend_elements.append(Patch(facecolor='none', edgecolor='none', label=''))
+        legend_elements.append(Patch(facecolor='none', edgecolor='none', label='Interfaces:'))
+        interface_colors = config.ribbon.interface_colors
+        for i, color in enumerate(interface_colors[:min(5, len(interface_colors))]):
+            legend_elements.append(Patch(facecolor=color, edgecolor='black', linewidth=0.5,
+                                        label=f'  Interface I{i+1}'))
+
+        # Unscored contacts
+        legend_elements.append(Patch(facecolor=config.ribbon.low_confidence_color, edgecolor='black',
+                                    linewidth=0.5, label='  Unscored (PAE >10)'))
+
+        ax_legend.legend(
+            handles=legend_elements,
+            loc='center',
+            fontsize=8,
+            title="Legend",
+            frameon=True,
+        )
+
+        fig.suptitle(f"Ribbon Plots - {results[0].job_name}", fontsize=14, y=0.98)
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+
+
 def generate_model_images(
     results: List[FoldingResult],
     output_dir: str,

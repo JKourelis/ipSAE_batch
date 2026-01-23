@@ -20,12 +20,30 @@ This tool is **inspired by** [ipSAE](https://doi.org/10.1101/2025.02.10.637595) 
 
 ## Supported Backends
 
+The backend is **automatically detected** by default based on file patterns. You can also specify it manually:
+
 | Backend | Flag | Description |
 |---------|------|-------------|
+| Auto-detect | `--backend auto` (default) | Automatically detect from file patterns |
 | AlphaFold3 | `--backend alphafold3` | AF3 server or local outputs |
 | ColabFold | `--backend colabfold` | ColabFold/AF2 multimer outputs |
 | Boltz2 | `--backend boltz2` | Boltz2 prediction outputs |
 | IntelliFold | `--backend intellifold` | IntelliFold server outputs |
+
+### Backend Auto-Detection
+
+When `--backend auto` is used (default), the backend is detected from file patterns:
+
+| Backend | Detection Pattern |
+|---------|------------------|
+| **Boltz2** | NPZ files present: `plddt_*.npz` AND `pae_*.npz` |
+| **ColabFold** | PDB files with `_rank_` pattern AND `*_scores_rank_*.json` |
+| **IntelliFold** | CIF files with `_sample-` pattern AND `*_confidences.json` |
+| **AlphaFold3** | CIF files with `_model_` pattern AND `*_full_data_*.json` AND `*_summary_confidences_*.json` |
+
+Detection priority: Boltz2 > ColabFold > IntelliFold > AlphaFold3
+
+To override auto-detection, specify the backend explicitly: `--backend colabfold`
 
 ## Installation
 
@@ -43,14 +61,17 @@ pip install -e .
 ## Quick Start
 
 ```bash
-# Basic processing
-ipsae-batch ./data/AF3 --backend alphafold3 --output_dir ./output
+# Basic processing (backend auto-detected)
+ipsae-batch ./data/AF3 --output_dir ./output
 
 # With PNG graphics
-ipsae-batch ./data/AF3 --backend alphafold3 --output_dir ./output --png
+ipsae-batch ./data/AF3 --output_dir ./output --png
 
-# ColabFold with custom cutoffs
-ipsae-batch ./data/ColabFold --backend colabfold --pae_cutoff 12 --output_dir ./output
+# Custom cutoffs (backend auto-detected)
+ipsae-batch ./data/ColabFold --pae_cutoff 12 --output_dir ./output
+
+# Explicit backend specification (overrides auto-detection)
+ipsae-batch ./data/ColabFold --backend colabfold --output_dir ./output
 ```
 
 ## Command Line Arguments
@@ -58,7 +79,7 @@ ipsae-batch ./data/ColabFold --backend colabfold --pae_cutoff 12 --output_dir ./
 | Argument | Description | Default |
 |----------|-------------|---------|
 | `input_folder` | Folder containing job output folders | Required |
-| `--backend` | Structure prediction backend | `alphafold3` |
+| `--backend` | Structure prediction backend | `auto` (auto-detect) |
 | `--pae_cutoff` | PAE cutoff for ipSAE calculation | 10 |
 | `--dist_cutoff` | Distance cutoff for interface residues (Å) | 10 |
 | `--output_dir` | Output directory for results | Same as input |
@@ -85,10 +106,13 @@ output_dir/
 
 ### Graphics (--png)
 
+PNG output shows all models for a job **side-by-side** for easy comparison:
+
 ```
 output_dir/
-├── job1_model0_matrix.png      # PMC/Contact probability matrix
-├── job1_model0_ribbon.png      # Circular ribbon diagram
+├── job1_matrices_combined.png  # All PMC/Contact probability matrices side-by-side
+├── job1_pae_combined.png       # All PAE matrices side-by-side
+├── job1_ribbons_combined.png   # All ribbon diagrams side-by-side
 └── ...
 ```
 
@@ -103,7 +127,7 @@ output_dir/
 </tr>
 <tr>
 <td>Upper triangle: PMC (Predicted Merged Confidence) combining pLDDT and PAE into a single confidence metric. Lower triangle: Contact probability derived from PAE and inter-residue distance. Chain boundaries shown with gaps; ticks indicate residue positions with chain labels (▼) marking N-terminus direction.</td>
-<td>Circular representation of protein chains with interface regions. Colored arcs indicate confident interface contacts; grey arcs show contacts below the PAE threshold. Arc thickness reflects contact confidence.</td>
+<td>Circular representation of protein chains with interface regions. Colored arcs indicate confident interface contacts; grey arcs show contacts below the PAE threshold. Interface regions and contact lines use matching colors.</td>
 </tr>
 </table>
 

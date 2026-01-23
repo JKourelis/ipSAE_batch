@@ -517,32 +517,25 @@ class RibbonPlot:
                 chain_pair = (iface['chain1'], iface['chain2'])
                 total_counts[key] = proximity_counts_by_chain_pair.get(chain_pair, scored_counts[key])
 
-            # Build lookup of interface contacts for quick checking
-            interface_contact_set = set()
+            # Build lookup mapping each contact to its specific interface color
+            # Key: (chain1, chain2, res1, res2) -> interface_color_key
+            # This handles multiple interfaces between the same chain pair correctly
+            contact_to_interface_key = {}
             for iface in interface_list:
                 chain1, chain2 = iface['chain1'], iface['chain2']
+                iface_key = iface.get('_color_key', iface.get('interface_id', f"{chain1}-{chain2}"))
                 if 'links' in iface:
                     for link in iface['links']:
                         res1, res2 = link['residue1'], link['residue2']
-                        interface_contact_set.add((chain1, chain2, res1, res2))
+                        contact_to_interface_key[(chain1, chain2, res1, res2)] = iface_key
 
             # Get low confidence color from config
             low_conf_color = config.ribbon.low_confidence_color
 
             # Draw contact LINES
-            # Interface contacts use interface color, proximity-only contacts use grey
+            # Interface contacts use their specific interface color, proximity-only contacts use grey
             for contact in contacts_for_links:
                 chain1, chain2 = contact['chain1'], contact['chain2']
-
-                # Find matching interface for color lookup
-                matching_iface = None
-                for iface in interface_list:
-                    if iface['chain1'] == chain1 and iface['chain2'] == chain2:
-                        matching_iface = iface
-                        break
-
-                key = matching_iface.get('_color_key', f"{chain1}-{chain2}") if matching_iface else f"{chain1}-{chain2}"
-                interface_color = interface_colors.get(key, '#808080')
 
                 if 'links' in contact:
                     # Draw individual contact lines
@@ -550,15 +543,17 @@ class RibbonPlot:
                         res1 = link['residue1']  # local index
                         res2 = link['residue2']  # local index
 
-                        # Check if this contact is in an interface (PAE-filtered)
-                        is_interface_contact = (chain1, chain2, res1, res2) in interface_contact_set
+                        # Look up which specific interface this contact belongs to
+                        contact_key = (chain1, chain2, res1, res2)
+                        iface_key = contact_to_interface_key.get(contact_key)
 
-                        if is_interface_contact:
-                            # Interface contact - use interface color
+                        if iface_key:
+                            # Interface contact - use that interface's specific color
+                            contact_color = interface_colors.get(iface_key, '#808080')
                             circos.link(
                                 (chain1, res1, res1 + 1),
                                 (chain2, res2, res2 + 1),
-                                color=interface_color,
+                                color=contact_color,
                                 alpha=link_alpha
                             )
                         else:
@@ -570,7 +565,15 @@ class RibbonPlot:
                                 alpha=link_alpha * 0.7  # Slightly more transparent
                             )
                 elif 'regions1' in contact and 'regions2' in contact:
-                    # Draw links between regions (uniform interface color)
+                    # Draw links between regions - find matching interface for this chain pair
+                    matching_iface = None
+                    for iface in interface_list:
+                        if iface['chain1'] == chain1 and iface['chain2'] == chain2:
+                            matching_iface = iface
+                            break
+                    iface_key = matching_iface.get('_color_key', f"{chain1}-{chain2}") if matching_iface else f"{chain1}-{chain2}"
+                    interface_color = interface_colors.get(iface_key, '#808080')
+
                     for region1 in contact['regions1']:
                         for region2 in contact['regions2']:
                             circos.link(

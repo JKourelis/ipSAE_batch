@@ -6,11 +6,18 @@ Supported backends:
 - colabfold: ColabFold/AlphaFold2-multimer (PDB + JSON)
 - boltz2: Boltz2 (CIF + NPZ + JSON)
 - intellifold: IntelliFold (CIF + JSON, AF3-like format)
+
+Auto-detection:
+The backend can be automatically detected from file patterns using detect_backend().
 """
 
 from .base import BaseReader, FoldingResult, ReaderError
+from .auto_detect import detect_backend, detect_backend_with_confidence, detect_backend_for_input_folder
 
-__all__ = ['BaseReader', 'FoldingResult', 'ReaderError', 'get_reader']
+__all__ = [
+    'BaseReader', 'FoldingResult', 'ReaderError', 'get_reader',
+    'detect_backend', 'detect_backend_with_confidence', 'detect_backend_for_input_folder'
+]
 
 # Registry of available readers (populated on import)
 _READERS = {}

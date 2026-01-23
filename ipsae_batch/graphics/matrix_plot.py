@@ -770,11 +770,11 @@ def plot_alphabridge_combined(
     fig.colorbar(im_lower, cax=cax_bottom, orientation='horizontal',
                  label=f'{lower_label} (0-{lower_vmax_str})')
 
-    # Set title - use suptitle to avoid overlap with cluster bar
+    # Set title - use ax.set_title when ax was provided (grid context), suptitle otherwise
     if title:
-        fig.suptitle(title, fontsize=14, y=0.98)
+        ax.set_title(title, fontsize=12, pad=10)
     else:
-        fig.suptitle(f'{upper_label} (upper) / {lower_label} (lower)', fontsize=14, y=0.98)
+        ax.set_title(f'{upper_label} (upper) / {lower_label} (lower)', fontsize=12, pad=10)
 
     return fig, ax
 
