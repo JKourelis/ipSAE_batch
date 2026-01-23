@@ -102,7 +102,7 @@ output_dir/
 <td><img src="images/example_model_ribbon.png" width="100%"/></td>
 </tr>
 <tr>
-<td>Upper triangle: PMC (Predicted Merged Confidence) or contact probability. Lower triangle: PAE (Predicted Aligned Error). Chain boundaries shown with gaps; ticks indicate residue positions with chain labels (▼) marking N-terminus direction.</td>
+<td>Upper triangle: PMC (Predicted Merged Confidence) combining pLDDT and PAE into a single confidence metric. Lower triangle: Contact probability derived from PAE and inter-residue distance. Chain boundaries shown with gaps; ticks indicate residue positions with chain labels (▼) marking N-terminus direction.</td>
 <td>Circular representation of protein chains with interface regions. Colored arcs indicate confident interface contacts; grey arcs show contacts below the PAE threshold. Arc thickness reflects contact confidence.</td>
 </tr>
 </table>
