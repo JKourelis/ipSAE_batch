@@ -28,11 +28,19 @@ from multiprocessing import Pool, cpu_count
 
 # Import data readers (relative imports for package)
 from .data_readers import get_reader, list_backends, FoldingResult, detect_backend_for_input_folder
+
+# Import parallel processing
+from .core.parallel_processing import process_folders_parallel
 AVAILABLE_BACKENDS = list_backends()
 
 # Import core scoring module
 from .core import calculate_scores_from_result
 from .core.scoring import calculate_per_contact_scores
+from .core.residue_selection import (
+    parse_residue_selection,
+    calculate_ipsae_selection_metrics,
+    display_selection_summary,
+)
 
 # Import output writers
 from .output_writers import write_aggregate_csv, write_per_residue_csv, write_per_contact_csv
@@ -101,10 +109,11 @@ def find_job_folders_for_backend(input_folder: str, backend: str) -> List[Tuple[
 def process_single_model(args: Tuple) -> Tuple[List[Dict], Optional[List[Dict]], Optional[List[Dict]], Dict]:
     """
     Worker function to process a single model.
-    Args is a tuple of (model_dict, pae_cutoff, dist_cutoff, per_residue, per_contact)
+    Args is a tuple of (model_dict, pae_cutoff, dist_cutoff, per_residue, per_contact, residue_selection)
     Returns (aggregate_results, per_residue_results, per_contact_results, model_info)
+    If residue_selection is provided, selection-specific metrics are added to aggregate results.
     """
-    model, pae_cutoff, dist_cutoff, per_residue, per_contact = args
+    model, pae_cutoff, dist_cutoff, per_residue, per_contact, residue_selection = args
 
     job_name = model['job_name']
     model_num = model['model_num']
@@ -130,9 +139,9 @@ def process_single_model(args: Tuple) -> Tuple[List[Dict], Optional[List[Dict]],
                 r['job_name'] = job_name
                 r['model'] = model_num
 
-        # Calculate per-contact scores if requested
+        # Calculate per-contact scores if requested (or needed for selection metrics)
         per_contact_results = None
-        if per_contact:
+        if per_contact or residue_selection:
             per_contact_results = calculate_per_contact_scores(
                 folding_result, pae_cutoff=pae_cutoff, dist_cutoff=dist_cutoff
             )
@@ -140,7 +149,16 @@ def process_single_model(args: Tuple) -> Tuple[List[Dict], Optional[List[Dict]],
                 c['job_name'] = job_name
                 c['model'] = model_num
 
-        return results, per_res_results, per_contact_results, model
+        # Calculate selection-specific metrics if residue selection is provided
+        if residue_selection and per_contact_results:
+            selection_metrics = calculate_ipsae_selection_metrics(
+                per_contact_results, residue_selection
+            )
+            # Add selection metrics to each aggregate result
+            for r in results:
+                r.update(selection_metrics)
+
+        return results, per_res_results, per_contact_results if per_contact else None, model
 
     except Exception as e:
         print(f"  Error processing {job_name} model {model_num}: {e}")
@@ -153,7 +171,9 @@ def process_batch(input_folder: str, pae_cutoff: float, dist_cutoff: float,
                   output_dir: str, num_workers: int = None,
                   per_residue: bool = False, per_contact: bool = False,
                   png: bool = False, pdf: bool = False, config_path: str = None,
-                  backend: str = 'alphafold3') -> None:
+                  backend: str = 'alphafold3',
+                  residue_selection: Optional[Dict] = None,
+                  cores: int = None) -> None:
     """Process all job folders and output results to CSV using parallel processing.
 
     Args:
@@ -168,13 +188,16 @@ def process_batch(input_folder: str, pae_cutoff: float, dist_cutoff: float,
         pdf: Whether to generate PDF report with side-by-side model comparison
         config_path: Path to graphics config CSV (optional)
         backend: Backend name ('alphafold3', 'colabfold', 'boltz2', 'intellifold')
+        residue_selection: Optional dict mapping chain_id -> set of residue numbers
+                          for focused analysis of specific residues
     """
     start_time = time.time()
 
     # Load graphics config if provided
+    graphics_config = None
     if config_path and HAS_GRAPHICS:
-        config = load_config_from_csv(config_path)
-        set_config(config)
+        graphics_config = load_config_from_csv(config_path)
+        set_config(graphics_config)
         print(f"Loaded config: {config_path}")
     elif (png or pdf) and not HAS_GRAPHICS:
         print("Warning: matplotlib/pycirclize not available, --png/--pdf disabled")
@@ -192,252 +215,26 @@ def process_batch(input_folder: str, pae_cutoff: float, dist_cutoff: float,
     if output_dir and not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    # Process each folder
-    all_combined_results = []
-    all_per_contact_results = []
-    total_models = 0
+    # Build config dict for parallel processing
+    config_dict = {
+        'backend': backend,
+        'pae_cutoff': pae_cutoff,
+        'dist_cutoff': dist_cutoff,
+        'output_dir': output_dir,
+        'per_residue': per_residue,
+        'per_contact': per_contact,
+        'png': png,
+        'pdf': pdf,
+        'residue_selection': residue_selection,
+        'graphics_config': graphics_config,
+    }
 
-    for folder, model_infos in job_folders_with_models:
-        job_name = model_infos[0]['job_name'] if model_infos else os.path.basename(folder)
-
-        # Read all models using the reader
-        models = []
-        for model_info in model_infos:
-            folding_result = reader.read_model(model_info)
-            if folding_result:
-                models.append({
-                    'job_name': folding_result.job_name,
-                    'model_num': folding_result.model_num,
-                    'folding_result': folding_result,
-                })
-
-        if not models:
-            print(f"\n{job_name}: No complete model sets found, skipping")
-            continue
-
-        print(f"\nProcessing: {job_name} ({len(models)} models)")
-        total_models += len(models)
-
-        # Prepare arguments for processing (per_contact always true if PNG/PDF requested)
-        need_per_contact = per_contact or png or pdf
-        work_args = [(model, pae_cutoff, dist_cutoff, per_residue, need_per_contact) for model in models]
-
-        # Determine number of workers for this folder
-        n_workers = num_workers
-        if n_workers is None:
-            n_workers = min(cpu_count(), len(models))
-        n_workers = max(1, min(n_workers, len(models)))
-
-        # Process models
-        folder_results = []
-        folder_per_res_results = []
-        folder_per_contact_results = []
-        model_results_map = {}  # model_num -> (agg_res, per_contact_res, folding_result)
-
-        if n_workers == 1:
-            for i, args in enumerate(work_args):
-                print(f"  Model {args[0]['model_num']}...")
-                agg_res, per_res, per_contact_res, model_info = process_single_model(args)
-                folder_results.extend(agg_res)
-                if per_res:
-                    folder_per_res_results.extend(per_res)
-                if per_contact_res:
-                    folder_per_contact_results.extend(per_contact_res)
-                model_results_map[model_info['model_num']] = (agg_res, per_contact_res, model_info['folding_result'])
-        else:
-            print(f"  Processing {len(models)} models in parallel ({n_workers} workers)...")
-            with Pool(processes=n_workers) as pool:
-                results_list = pool.map(process_single_model, work_args)
-
-            for agg_res, per_res, per_contact_res, model_info in results_list:
-                folder_results.extend(agg_res)
-                if per_res:
-                    folder_per_res_results.extend(per_res)
-                if per_contact_res:
-                    folder_per_contact_results.extend(per_contact_res)
-                model_results_map[model_info['model_num']] = (agg_res, per_contact_res, model_info['folding_result'])
-
-        # Write per-folder output
-        if output_dir:
-            folder_output = os.path.join(output_dir, f"{job_name}_ipSAE.csv")
-        else:
-            folder_output = os.path.join(folder, f"{job_name}_ipSAE.csv")
-
-        write_aggregate_csv(folder_results, folder_output)
-        print(f"  Wrote: {folder_output}")
-
-        # Write per-residue output if requested
-        if per_residue and folder_per_res_results:
-            if output_dir:
-                per_res_output = os.path.join(output_dir, f"{job_name}_ipSAE_byres.csv")
-            else:
-                per_res_output = os.path.join(folder, f"{job_name}_ipSAE_byres.csv")
-
-            write_per_residue_csv(folder_per_res_results, per_res_output)
-            print(f"  Wrote: {per_res_output}")
-
-        # Write per-contact output if requested
-        if per_contact and folder_per_contact_results:
-            if output_dir:
-                per_contact_output = os.path.join(output_dir, f"{job_name}_ipSAE_contacts.csv")
-            else:
-                per_contact_output = os.path.join(folder, f"{job_name}_ipSAE_contacts.csv")
-
-            write_per_contact_csv(folder_per_contact_results, per_contact_output)
-            print(f"  Wrote: {per_contact_output}")
-
-        # Generate PNG graphics if requested (combined side-by-side for all models)
-        if png and HAS_GRAPHICS:
-            config = get_config()
-
-            # Pre-compute data for all models
-            precomputed_data = {}
-            folder_folding_results = []
-
-            for model_num, (agg_res, contact_scores, folding_result) in model_results_map.items():
-                try:
-                    folder_folding_results.append(folding_result)
-
-                    pmc = extract_pmc(folding_result)
-                    contact_probs = extract_contact_probs(folding_result)
-                    clusters = cluster_domains_from_result(folding_result)
-
-                    interfaces = get_geometric_interfaces(
-                        folding_result,
-                        distance_threshold=dist_cutoff,
-                        pae_threshold=pae_cutoff,
-                        gap_merge=config.interface.gap_merge
-                    )
-
-                    proximity_contacts = get_proximity_contacts(
-                        folding_result,
-                        distance_threshold=dist_cutoff
-                    )
-
-                    precomputed_data[model_num] = {
-                        'pmc': pmc,
-                        'contact_probs': contact_probs,
-                        'clusters': clusters,
-                        'interfaces': interfaces,
-                        'proximity_contacts': proximity_contacts,
-                        'contact_scores': contact_scores,
-                    }
-                except Exception as e:
-                    print(f"  Warning: Failed to precompute data for model {model_num}: {e}")
-
-            # Sort by model number
-            folder_folding_results.sort(key=lambda r: r.model_num)
-
-            # Generate combined PNG outputs
-            try:
-                if output_dir:
-                    matrix_path = os.path.join(output_dir, f"{job_name}_matrices_combined.png")
-                    pae_path = os.path.join(output_dir, f"{job_name}_pae_combined.png")
-                    ribbon_path = os.path.join(output_dir, f"{job_name}_ribbons_combined.png")
-                else:
-                    matrix_path = os.path.join(folder, f"{job_name}_matrices_combined.png")
-                    pae_path = os.path.join(folder, f"{job_name}_pae_combined.png")
-                    ribbon_path = os.path.join(folder, f"{job_name}_ribbons_combined.png")
-
-                # Combined PMC/contact_prob matrices
-                generate_combined_matrix_png(
-                    folder_folding_results,
-                    matrix_path,
-                    precomputed_data=precomputed_data,
-                    dpi=config.dpi
-                )
-                print(f"  Wrote: {matrix_path}")
-
-                # Combined PAE matrices
-                generate_combined_pae_png(
-                    folder_folding_results,
-                    pae_path,
-                    dpi=config.dpi
-                )
-                print(f"  Wrote: {pae_path}")
-
-                # Combined ribbon plots with shared legend
-                generate_combined_ribbon_png(
-                    folder_folding_results,
-                    ribbon_path,
-                    precomputed_data=precomputed_data,
-                    dpi=config.dpi
-                )
-                print(f"  Wrote: {ribbon_path}")
-
-            except Exception as e:
-                print(f"  Warning: Failed to generate combined graphics: {e}")
-                import traceback
-                traceback.print_exc()
-
-        # Generate PDF report if requested
-        if pdf and HAS_GRAPHICS:
-            try:
-                config = get_config()
-
-                # Use precomputed data from PNG section if available, otherwise compute
-                if not png:
-                    # Need to compute precomputed_data (PNG section didn't run)
-                    precomputed_data = {}
-                    folder_folding_results = []
-
-                    for model_num, (agg_res, contact_scores, folding_result) in model_results_map.items():
-                        folder_folding_results.append(folding_result)
-
-                        pmc = extract_pmc(folding_result)
-                        contact_probs = extract_contact_probs(folding_result)
-                        clusters = cluster_domains_from_result(folding_result)
-
-                        interfaces = get_geometric_interfaces(
-                            folding_result,
-                            distance_threshold=dist_cutoff,
-                            pae_threshold=pae_cutoff,
-                            gap_merge=config.interface.gap_merge
-                        )
-
-                        proximity_contacts = get_proximity_contacts(
-                            folding_result,
-                            distance_threshold=dist_cutoff
-                        )
-
-                        precomputed_data[model_num] = {
-                            'pmc': pmc,
-                            'contact_probs': contact_probs,
-                            'clusters': clusters,
-                            'interfaces': interfaces,
-                            'proximity_contacts': proximity_contacts,
-                            'contact_scores': contact_scores,
-                        }
-
-                    folder_folding_results.sort(key=lambda r: r.model_num)
-                # else: reuse precomputed_data and folder_folding_results from PNG section
-
-                # Generate PDF
-                if output_dir:
-                    pdf_path = os.path.join(output_dir, f"{job_name}_report.pdf")
-                else:
-                    pdf_path = os.path.join(folder, f"{job_name}_report.pdf")
-
-                report = ModelPDFReport(
-                    folder_folding_results,
-                    title=f"{job_name} Model Analysis",
-                    precomputed_data=precomputed_data
-                )
-                report.generate(
-                    pdf_path,
-                    include_pae=True,
-                    include_joint=True,
-                    include_ribbon=True,
-                )
-                print(f"  Wrote: {pdf_path}")
-
-            except Exception as e:
-                print(f"  Warning: Failed to generate PDF report: {e}")
-                import traceback
-                traceback.print_exc()
-
-        all_combined_results.extend(folder_results)
-        all_per_contact_results.extend(folder_per_contact_results)
+    # Process folders (parallel or sequential based on cores)
+    all_combined_results, all_per_contact_results, total_models = process_folders_parallel(
+        job_folders_with_models,
+        config_dict,
+        cores=cores,
+    )
 
     elapsed_time = time.time() - start_time
 
@@ -530,6 +327,11 @@ Examples:
                         help='Generate PDF report with side-by-side model comparison per job')
     parser.add_argument('--config', type=str, default=None,
                         help='Path to graphics configuration CSV file')
+    parser.add_argument('--select-residues', type=str, default=None,
+                        dest='select_residues',
+                        help='Focus analysis on specific residues (e.g., "A:100-105,B:203,C:50-60")')
+    parser.add_argument('--cores', type=int, default=None,
+                        help='Number of CPU cores for folder-level parallelization (default: all - 1)')
 
     args = parser.parse_args()
 
@@ -551,6 +353,11 @@ Examples:
             print(f"Available backends: {', '.join(AVAILABLE_BACKENDS)}")
             sys.exit(1)
 
+    # Parse residue selection if provided
+    residue_selection = None
+    if args.select_residues:
+        residue_selection = parse_residue_selection(args.select_residues)
+
     print(f"ipSAE Batch Processor")
     print(f"=====================")
     print(f"Backend: {backend}")
@@ -565,6 +372,12 @@ Examples:
     print(f"PDF reports: {args.pdf}")
     if args.config:
         print(f"Config file: {args.config}")
+    if args.cores:
+        print(f"Parallel cores: {args.cores}")
+    else:
+        print(f"Parallel cores: auto (CPU count - 1)")
+    if residue_selection:
+        display_selection_summary(residue_selection)
 
     process_batch(
         args.input_folder,
@@ -577,7 +390,9 @@ Examples:
         args.png,
         args.pdf,
         args.config,
-        backend
+        backend,
+        residue_selection,
+        args.cores
     )
 
 

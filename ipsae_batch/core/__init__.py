@@ -19,6 +19,15 @@ from .scoring import (
     get_per_contact_scores_for_interface,
 )
 
+from .residue_selection import (
+    parse_residue_selection,
+    is_residue_selected,
+    is_contact_selected,
+    filter_contacts_by_selection,
+    calculate_ipsae_selection_metrics,
+    display_selection_summary,
+)
+
 __all__ = [
     'ptm_func',
     'ptm_func_vec',
@@ -27,4 +36,11 @@ __all__ = [
     'calculate_scores_from_result',
     'calculate_per_contact_scores',
     'get_per_contact_scores_for_interface',
+    # Residue selection
+    'parse_residue_selection',
+    'is_residue_selected',
+    'is_contact_selected',
+    'filter_contacts_by_selection',
+    'calculate_ipsae_selection_metrics',
+    'display_selection_summary',
 ]

@@ -56,7 +56,7 @@ cd ipSAE_batch
 pip install -e .
 ```
 
-**Dependencies:** numpy, matplotlib, pycirclize, igraph, seaborn, scipy, networkx, pandas
+**Dependencies:** numpy, matplotlib, pycirclize, igraph, seaborn, scipy, networkx, pandas, plotly, tqdm
 
 ## Quick Start
 
@@ -72,6 +72,9 @@ ipsae-batch ./data/ColabFold --pae_cutoff 12 --output_dir ./output
 
 # Explicit backend specification (overrides auto-detection)
 ipsae-batch ./data/ColabFold --backend colabfold --output_dir ./output
+
+# Focus analysis on specific residues (e.g., active site)
+ipsae-batch ./data/AF3 --output_dir ./output --select-residues "A:100-105,B:203"
 ```
 
 ## Command Line Arguments
@@ -83,12 +86,50 @@ ipsae-batch ./data/ColabFold --backend colabfold --output_dir ./output
 | `--pae_cutoff` | PAE cutoff for ipSAE calculation | 10 |
 | `--dist_cutoff` | Distance cutoff for interface residues (Å) | 10 |
 | `--output_dir` | Output directory for results | Same as input |
-| `--workers` | Number of parallel workers | CPU cores |
+| `--cores` | Number of CPU cores for parallel processing | CPU count - 1 |
 | `--per_residue` | Output per-residue scores | False |
 | `--per_contact` | Output per-contact scores | False |
 | `--png` | Generate PNG graphics | False |
 | `--pdf` | Generate PDF reports | False |
 | `--config` | Path to graphics configuration CSV | None |
+| `--select-residues` | Focus analysis on specific residues (see below) | None |
+
+## Residue Selection
+
+Focus analysis on specific residues (e.g., active sites, binding pockets, mutation sites).
+
+### Syntax
+
+Standard structural biology format with chain:residue notation:
+- `"A:100-105"` - Chain A, residues 100-105 (inclusive range)
+- `"A:100,102,104"` - Chain A, specific residues
+- `"A:100-105,B:203,C:50-60"` - Multiple chains and mixed formats
+
+### Examples
+
+```bash
+# Protease active site analysis
+ipsae-batch ./data/AF3 --select-residues "A:57,102,195"
+
+# Kinase ATP-binding site
+ipsae-batch ./data/AF3 --select-residues "A:72-78,166-171"
+```
+
+### Contact Selection Logic
+
+A contact is SELECTED if **EITHER** residue is in the selection set (OR logic). This enables finding ALL contacts involving a binding pocket residue.
+
+### Selection Metrics
+
+When `--select-residues` is used, the following columns are added to the output CSV:
+
+| Metric | Description |
+|--------|-------------|
+| `n_contacts_selection` | Count of contacts involving selected residues |
+| `ipSAE_selection` | Average ipSAE for selected contacts |
+| `ipTM_selection` | Average ipTM for selected contacts |
+| `mean_pae_selection` | Average PAE for selected contacts |
+| `mean_plddt_selection` | Average pLDDT for selected contacts |
 
 ## Output
 

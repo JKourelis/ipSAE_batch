@@ -68,20 +68,42 @@ CHAIN_COUNT_COLORS = {
 }
 
 # Metrics available for X/Y axes
-# Maps canonical name -> (higher_is_better, display_name, description)
+# Maps canonical name -> (higher_is_better, display_name, description, group)
+# Groups: 'scores', 'counts', 'confidence', 'selection_scores', 'selection_counts'
 METRIC_DEFINITIONS = {
-    'ipSAE': (True, 'ipSAE', 'Interface Predicted SAE (d0res normalization)'),
-    'ipSAE_d0chn': (True, 'ipSAE (chain)', 'ipSAE with chain length normalization'),
-    'ipSAE_d0dom': (True, 'ipSAE (domain)', 'ipSAE with domain normalization'),
-    'ipTM': (True, 'ipTM', 'Interface predicted TM-score'),
-    'pTM': (True, 'pTM', 'Global predicted TM-score'),
-    'contact_prob_mean': (True, 'Contact Prob', 'Mean contact probability'),
-    'n_contacts': (True, 'N Contacts', 'Number of interface contacts'),
-    'pae_mean': (False, 'PAE (mean)', 'Mean PAE at interface (lower is better)'),
-    'pDockQ': (True, 'pDockQ', 'Predicted DockQ score'),
-    'pDockQ2': (True, 'pDockQ2', 'Enhanced pDockQ with PAE'),
-    'LIS': (True, 'LIS', 'Local Interaction Score'),
+    # Primary scores (0-1 scale)
+    'ipSAE': (True, 'ipSAE', 'Interface Predicted SAE (d0res normalization)', 'scores'),
+    'ipSAE_d0chn': (True, 'ipSAE (chain)', 'ipSAE with chain length normalization', 'scores'),
+    'ipSAE_d0dom': (True, 'ipSAE (domain)', 'ipSAE with domain normalization', 'scores'),
+    'ipTM': (True, 'ipTM', 'Interface predicted TM-score', 'scores'),
+    'pTM': (True, 'pTM', 'Global predicted TM-score', 'scores'),
+    'pDockQ': (True, 'pDockQ', 'Predicted DockQ score', 'scores'),
+    'pDockQ2': (True, 'pDockQ2', 'Enhanced pDockQ with PAE', 'scores'),
+    'LIS': (True, 'LIS', 'Local Interaction Score', 'scores'),
+    # Contact counts
+    'n_contacts': (True, 'N Contacts', 'Number of interface contacts', 'counts'),
+    'contact_prob_mean': (True, 'Contact Prob', 'Mean contact probability', 'counts'),
+    # Confidence (lower is better)
+    'pae_mean': (False, 'PAE (mean)', 'Mean PAE at interface (lower is better)', 'confidence'),
+    # SELECTION scores (--select-residues)
+    'ipSAE_selection': (True, 'ipSAE (Sel)', 'ipSAE for selected residues', 'selection_scores'),
+    'ipTM_selection': (True, 'ipTM (Sel)', 'ipTM for selected residues', 'selection_scores'),
+    'mean_plddt_selection': (True, 'pLDDT (Sel)', 'Mean pLDDT for selected contacts', 'selection_scores'),
+    # SELECTION counts
+    'n_contacts_selection': (True, 'N Contacts (Sel)', 'Contacts involving selected residues', 'selection_counts'),
+    # SELECTION confidence
+    'mean_pae_selection': (False, 'PAE (Sel)', 'Mean PAE for selected contacts (lower is better)', 'selection_confidence'),
 }
+
+# Group display order and labels
+METRIC_GROUPS = [
+    ('selection_scores', '── Selection Scores ──'),
+    ('selection_counts', '── Selection Counts ──'),
+    ('selection_confidence', '── Selection Confidence ──'),
+    ('scores', '── Interface Scores ──'),
+    ('counts', '── Interface Counts ──'),
+    ('confidence', '── Confidence ──'),
+]
 
 
 def _check_dependencies():
@@ -102,19 +124,33 @@ def _get_metric_info(metric: str) -> Tuple[bool, str, str]:
     """Get metric info: (higher_is_better, display_name, description)."""
     defn = METRIC_DEFINITIONS.get(metric)
     if defn:
-        return defn
+        return (defn[0], defn[1], defn[2])  # Skip group (4th element)
     return (True, metric, metric)
+
+
+def _get_metric_group(metric: str) -> str:
+    """Get metric group for organizing dropdowns."""
+    defn = METRIC_DEFINITIONS.get(metric)
+    if defn and len(defn) >= 4:
+        return defn[3]
+    return 'other'
 
 
 def _get_available_metrics(df: "pd.DataFrame") -> List[str]:
     """Get list of available numeric metrics in dataframe for scoring comparisons."""
     # Metrics we want to show for PPI scoring (in order of priority)
     scoring_metrics = [
+        # Selection metrics FIRST (when active, most relevant)
+        'ipSAE_selection', 'ipTM_selection', 'mean_plddt_selection',
+        'n_contacts_selection', 'mean_pae_selection',
+        # Primary interface scores
         'ipSAE', 'ipSAE_d0chn', 'ipSAE_d0dom',
         'ipTM', 'ipTM_extracted', 'ipTM_calculated', 'ipTM_d0chn',
         'pTM', 'pTM_extracted', 'pTM_calculated',
         'pDockQ', 'pDockQ2', 'LIS',
-        'contact_prob_mean', 'n_contacts',
+        # Counts
+        'n_contacts', 'contact_prob_mean',
+        # Confidence
         'pae_mean',
     ]
 
@@ -128,17 +164,67 @@ def _get_available_metrics(df: "pd.DataFrame") -> List[str]:
 
     available = []
 
-    # First add scoring metrics that exist
+    # First add scoring metrics that exist AND have data
     for m in scoring_metrics:
         if m in df.columns and pd.api.types.is_numeric_dtype(df[m]):
-            available.append(m)
+            if df[m].notna().any():  # Only include if has at least one value
+                available.append(m)
 
     # Then add any other numeric columns not already included and not internal
     for col in df.select_dtypes(include=[np.number]).columns:
         if col not in available and col not in internal_params:
-            available.append(col)
+            if df[col].notna().any():
+                available.append(col)
 
     return available
+
+
+def _has_selection_data(df: "pd.DataFrame") -> bool:
+    """Check if selection metrics have any data."""
+    selection_metrics = ['ipSAE_selection', 'ipTM_selection', 'n_contacts_selection']
+    for m in selection_metrics:
+        if m in df.columns and df[m].notna().any():
+            return True
+    return False
+
+
+def _build_grouped_options(available_metrics: List[str], selected_metric: str) -> str:
+    """Build HTML options with optgroups for metric dropdown."""
+    # Group metrics
+    grouped = {}
+    ungrouped = []
+
+    for m in available_metrics:
+        group = _get_metric_group(m)
+        if group and group != 'other':
+            if group not in grouped:
+                grouped[group] = []
+            grouped[group].append(m)
+        else:
+            ungrouped.append(m)
+
+    options = ""
+
+    # Add groups in order
+    for group_key, group_label in METRIC_GROUPS:
+        if group_key in grouped and grouped[group_key]:
+            options += f'<optgroup label="{group_label}">\n'
+            for m in grouped[group_key]:
+                display_name = _get_metric_info(m)[1]
+                selected = ' selected' if m == selected_metric else ''
+                options += f'  <option value="{m}"{selected}>{display_name}</option>\n'
+            options += '</optgroup>\n'
+
+    # Add ungrouped metrics
+    if ungrouped:
+        options += '<optgroup label="── Other ──">\n'
+        for m in ungrouped:
+            display_name = _get_metric_info(m)[1]
+            selected = ' selected' if m == selected_metric else ''
+            options += f'  <option value="{m}"{selected}>{display_name}</option>\n'
+        options += '</optgroup>\n'
+
+    return options
 
 
 def _count_chains_in_job(df: "pd.DataFrame") -> "pd.DataFrame":
@@ -332,8 +418,15 @@ def generate_batch_comparison_html(
     # All models included - best model selection done dynamically in JS
     all_data_json = df.to_dict(orient='records')
 
+    # Check if selection data exists - if so, override defaults
+    has_selection = _has_selection_data(df)
+    if has_selection:
+        # When selection is active, default to selection metrics
+        default_x_metric = 'ipTM'  # Keep X as overall for comparison
+        default_y_metric = 'ipSAE_selection'  # Y shows selection performance
+        best_model_metric = 'ipSAE_selection'  # Sort by selection metric
+
     # Resolve default metrics to actual column names
-    # Try to find ipTM variant if 'ipTM' requested
     def resolve_metric(requested, available):
         if requested in available:
             return requested
@@ -352,18 +445,12 @@ def generate_batch_comparison_html(
 
     resolved_x = resolve_metric(default_x_metric, available_metrics)
     resolved_y = resolve_metric(default_y_metric, available_metrics)
+    resolved_best = resolve_metric(best_model_metric, available_metrics)
 
-    # Build metric options HTML with resolved defaults
-    def build_options(selected_metric):
-        options = ""
-        for m in available_metrics:
-            display_name = _get_metric_info(m)[1]
-            selected = ' selected' if m == selected_metric else ''
-            options += f'<option value="{m}"{selected}>{display_name}</option>\n'
-        return options
-
-    x_metric_options = build_options(resolved_x)
-    y_metric_options = build_options(resolved_y)
+    # Build grouped metric options HTML
+    x_metric_options = _build_grouped_options(available_metrics, resolved_x)
+    y_metric_options = _build_grouped_options(available_metrics, resolved_y)
+    best_metric_options = _build_grouped_options(available_metrics, resolved_best)
 
     # Build chain color legend HTML
     chain_legend_html = ""
@@ -509,7 +596,7 @@ def generate_batch_comparison_html(
         <div class="control-group">
             <label>Best Model By</label>
             <select id="best-metric" onchange="updateScatterPlot()">
-                {y_metric_options}
+                {best_metric_options}
             </select>
         </div>
         <div class="control-group">
@@ -607,6 +694,33 @@ def generate_batch_comparison_html(
     <div id="corr-description" style="background: #f0f4f8; padding: 8px 15px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; color: #555;"></div>
     <div class="plot-container" id="correlation-plot"></div>
 
+    <!-- Selection Correlation Matrix - only shown when selection metrics exist -->
+    <div id="selection-corr-section" style="display: none;">
+        <h2>Selection Metrics Correlation Matrix</h2>
+        <div class="info" style="margin-bottom: 15px;">
+            <strong>Note:</strong> This matrix shows correlations between selection-specific metrics
+            (from <code>--select-residues</code>) and overall interface metrics.
+        </div>
+        <div class="controls" style="margin-bottom: 10px;">
+            <div class="control-group">
+                <label>Data Source</label>
+                <select id="sel-corr-source" onchange="updateSelectionCorrelationMatrix()">
+                    <option value="best" selected>Best model per job</option>
+                    <option value="all">All models</option>
+                    <option value="average">Average per job</option>
+                </select>
+            </div>
+            <div class="stats-box" style="margin-left: 20px;">
+                <div class="stat">
+                    <div class="stat-value" id="sel-corr-n-points">-</div>
+                    <div class="stat-label">Data Points</div>
+                </div>
+            </div>
+        </div>
+        <div id="sel-corr-description" style="background: #f0f4f8; padding: 8px 15px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; color: #555;"></div>
+        <div class="plot-container" id="selection-correlation-plot"></div>
+    </div>
+
     <script>
         // Embedded data
         const allData = {json.dumps(all_data_json)};
@@ -614,8 +728,19 @@ def generate_batch_comparison_html(
         // Metrics available for correlation (numeric scoring metrics)
         const corrMetrics = {json.dumps(available_metrics)};
 
+        // Selection metrics (--select-residues) - shown only when data exists
+        const selectionMetrics = [
+            'n_contacts_selection', 'ipSAE_selection', 'ipTM_selection',
+            'mean_pae_selection', 'mean_plddt_selection'
+        ];
+
+        // Key overall metrics to correlate with selection metrics
+        const overallMetricsForSelection = [
+            'ipSAE', 'ipTM', 'pDockQ2', 'n_contacts', 'pae_mean'
+        ];
+
         // Metrics where lower is better (for best model selection)
-        const lowerIsBetter = ['pae_mean'];
+        const lowerIsBetter = ['pae_mean', 'mean_pae_selection'];
 
         // Chain colors (Paul Tol)
         const chainColors = {{
@@ -1079,16 +1204,149 @@ def generate_batch_comparison_html(
             Plotly.newPlot('correlation-plot', [trace], layout, {{responsive: true}});
         }}
 
+        // Check if any selection metrics have data
+        function hasSelectionData() {{
+            return selectionMetrics.some(m =>
+                allData.some(d => d[m] != null && !isNaN(d[m]))
+            );
+        }}
+
+        // Get available selection metrics (ones with data)
+        function getAvailableSelectionMetrics() {{
+            return selectionMetrics.filter(m =>
+                allData.some(d => d[m] != null && !isNaN(d[m]))
+            );
+        }}
+
+        // Get available overall metrics for selection correlation (ones with data)
+        function getAvailableOverallMetrics() {{
+            return overallMetricsForSelection.filter(m =>
+                allData.some(d => d[m] != null && !isNaN(d[m]))
+            );
+        }}
+
+        function updateSelectionCorrelationMatrix() {{
+            const section = document.getElementById('selection-corr-section');
+            if (!hasSelectionData()) {{
+                section.style.display = 'none';
+                return;
+            }}
+            section.style.display = 'block';
+
+            const source = document.getElementById('sel-corr-source').value;
+
+            // Get available metrics
+            const availSelMetrics = getAvailableSelectionMetrics();
+            const availOverallMetrics = getAvailableOverallMetrics();
+
+            // Combine: selection metrics + relevant overall metrics
+            const metricsToShow = [...availSelMetrics, ...availOverallMetrics];
+
+            if (metricsToShow.length < 2) {{
+                document.getElementById('selection-correlation-plot').innerHTML =
+                    '<p style="text-align:center;color:#666;">Not enough metrics with data</p>';
+                return;
+            }}
+
+            let data = [...allData];
+
+            // Get data based on source
+            let processedData;
+            let description = '';
+            if (source === 'best') {{
+                // Use ipSAE_selection for best model selection if available
+                const bestMetric = availSelMetrics.includes('ipSAE_selection')
+                    ? 'ipSAE_selection' : 'ipSAE';
+                processedData = getBestModels(data, bestMetric);
+                description = `Based on <b>best model</b> (by ${{bestMetric}}) per interface.`;
+            }} else if (source === 'average') {{
+                processedData = getAveragePerJob(data, metricsToShow);
+                description = `Based on <b>average</b> of all models per interface.`;
+            }} else {{
+                processedData = data;
+                description = `Based on <b>all models</b>. <i>(Note: models within a job are correlated)</i>`;
+            }}
+
+            // Count data points with selection data
+            const nPoints = processedData.filter(d =>
+                availSelMetrics.some(m => d[m] != null && !isNaN(d[m]))
+            ).length;
+
+            document.getElementById('sel-corr-n-points').textContent = nPoints;
+            document.getElementById('sel-corr-description').innerHTML = description;
+
+            if (nPoints < 3) {{
+                document.getElementById('selection-correlation-plot').innerHTML =
+                    '<p style="text-align:center;color:#666;">Not enough data points (need ≥3) for correlation matrix</p>';
+                return;
+            }}
+
+            // Compute correlation matrix
+            const matrix = [];
+            const labels = metricsToShow.map(m => {{
+                // Shorter labels for display
+                return m.replace('_selection', ' (Sel)')
+                        .replace('ipSAE', 'ipSAE')
+                        .replace('ipTM', 'ipTM')
+                        .replace('n_contacts', 'N Contacts')
+                        .replace('mean_pae', 'PAE')
+                        .replace('mean_plddt', 'pLDDT')
+                        .replace('_', ' ');
+            }});
+
+            for (let i = 0; i < metricsToShow.length; i++) {{
+                const row = [];
+                for (let j = 0; j < metricsToShow.length; j++) {{
+                    const xVals = [];
+                    const yVals = [];
+                    processedData.forEach(d => {{
+                        const x = d[metricsToShow[i]];
+                        const y = d[metricsToShow[j]];
+                        if (x != null && y != null && !isNaN(x) && !isNaN(y)) {{
+                            xVals.push(x);
+                            yVals.push(y);
+                        }}
+                    }});
+                    row.push(pearsonCorr(xVals, yVals));
+                }}
+                matrix.push(row);
+            }}
+
+            const trace = {{
+                z: matrix,
+                x: labels,
+                y: labels,
+                type: 'heatmap',
+                colorscale: 'RdBu',
+                zmid: 0,
+                zmin: -1,
+                zmax: 1,
+                text: matrix.map(row => row.map(v => isNaN(v) ? 'N/A' : v.toFixed(2))),
+                texttemplate: '%{{text}}',
+                hovertemplate: '%{{x}} vs %{{y}}<br>R = %{{z:.3f}}<extra></extra>'
+            }};
+
+            const layout = {{
+                width: 600,
+                height: 500,
+                margin: {{ l: 140, r: 50, t: 30, b: 140 }}
+            }};
+
+            Plotly.newPlot('selection-correlation-plot', [trace], layout, {{responsive: true}});
+        }}
+
         function updateAllPlots() {{
             updateScatterPlot();
             updateJitterPlot();
             updateCorrelationMatrix();
+            updateSelectionCorrelationMatrix();
         }}
 
         // Initialize plots
         updateScatterPlot();
         updateJitterPlot();
         updateCorrelationMatrix();
+        updateSelectionCorrelationMatrix();
     </script>
 </body>
 </html>'''

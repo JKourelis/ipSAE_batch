@@ -14,7 +14,13 @@ AGGREGATE_FIELDS = [
     'ipSAE', 'ipSAE_d0chn', 'ipSAE_d0dom', 'ipTM_extracted', 'ipTM_calculated', 'ipTM_d0chn',
     'pTM_calculated', 'pDockQ', 'pDockQ2', 'LIS', 'n_contacts',
     'n0res', 'n0chn', 'n0dom', 'd0res', 'd0chn', 'd0dom',
-    'nres1', 'nres2', 'dist1', 'dist2'
+    'nres1', 'nres2', 'dist1', 'dist2',
+    # SELECTION: Metrics for user-selected residues (--select-residues)
+    'n_contacts_selection',             # Count of contacts involving selected residues
+    'ipSAE_selection',                  # Average ipSAE for selected contacts
+    'ipTM_selection',                   # Average ipTM for selected contacts
+    'mean_pae_selection',               # Average PAE for selected contacts
+    'mean_plddt_selection',             # Average pLDDT for selected contacts
 ]
 
 PER_RESIDUE_FIELDS = [
