@@ -221,6 +221,7 @@ class AlphaFold3Reader(BaseReader):
         ca_residues = []
         cb_residues = []
         token_mask = []
+        seen_ligand_residues = {}  # (chain_id, residue_name) -> True
 
         atomsitefield_dict = {}
         atomsitefield_num = 0
@@ -237,6 +238,29 @@ class AlphaFold3Reader(BaseReader):
                     atom = self._parse_cif_atom_line(line, atomsitefield_dict)
                     if atom is None:
                         token_mask.append(0)
+                        continue
+
+                    if atom.get('is_ligand', False):
+                        # Ligand atom: one representative per (chain, residue_name)
+                        lig_key = (atom['chain_id'], atom['residue_name'])
+                        if lig_key not in seen_ligand_residues:
+                            # First non-hydrogen atom of this ligand
+                            if atom['atom_name'][0] != 'H':
+                                seen_ligand_residues[lig_key] = True
+                                token_mask.append(1)
+                                entry = {
+                                    'atom_num': atom['atom_num'],
+                                    'coor': np.array([atom['x'], atom['y'], atom['z']]),
+                                    'res': atom['residue_name'],
+                                    'chainid': atom['chain_id'],
+                                    'resnum': atom['residue_seq_num'],
+                                }
+                                ca_residues.append(entry)
+                                cb_residues.append(entry)
+                            else:
+                                token_mask.append(0)
+                        else:
+                            token_mask.append(0)
                         continue
 
                     # CA or C1' atoms (residue representatives)
@@ -275,19 +299,29 @@ class AlphaFold3Reader(BaseReader):
             return None
 
         try:
-            residue_seq_num = linelist[fielddict['label_seq_id']]
-            if residue_seq_num == ".":
-                return None  # Ligand atom
+            residue_seq_num_str = linelist[fielddict['label_seq_id']]
+            is_ligand = residue_seq_num_str == "."
+
+            if is_ligand:
+                # Ligand atom: use auth_seq_id for residue number
+                if 'auth_seq_id' in fielddict:
+                    auth_seq_str = linelist[fielddict['auth_seq_id']]
+                    residue_seq_num = int(auth_seq_str) if auth_seq_str != "." else 1
+                else:
+                    residue_seq_num = 1
+            else:
+                residue_seq_num = int(residue_seq_num_str)
 
             return {
                 'atom_num': int(linelist[fielddict['id']]),
                 'atom_name': linelist[fielddict['label_atom_id']],
                 'residue_name': linelist[fielddict['label_comp_id']],
                 'chain_id': linelist[fielddict['label_asym_id']],
-                'residue_seq_num': int(residue_seq_num),
+                'residue_seq_num': residue_seq_num,
                 'x': float(linelist[fielddict['Cartn_x']]),
                 'y': float(linelist[fielddict['Cartn_y']]),
                 'z': float(linelist[fielddict['Cartn_z']]),
+                'is_ligand': is_ligand,
             }
         except (ValueError, IndexError, KeyError):
             return None

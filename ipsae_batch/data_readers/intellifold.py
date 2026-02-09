@@ -139,6 +139,19 @@ class IntelliFoldReader(BaseReader):
             plddt_from_cif = np.array([res['plddt'] for res in ca_residues])
             plddt = plddt_from_cif
 
+            # Handle dimension mismatch if PAE doesn't include ligand tokens
+            if pae_matrix.shape[0] != num_residues:
+                is_ligand_mask = np.array([r.get('is_ligand', False) for r in ca_residues])
+                polymer_indices = np.where(~is_ligand_mask)[0]
+
+                if pae_matrix.shape[0] == len(polymer_indices):
+                    # PAE only covers polymer residues - pad for ligands
+                    pae_full = np.full((num_residues, num_residues), 30.0)
+                    pae_full[np.ix_(polymer_indices, polymer_indices)] = pae_matrix
+                    pae_matrix = pae_full
+                else:
+                    print(f"  Warning: PAE dimension ({pae_matrix.shape[0]}) != residue count ({num_residues})")
+
             # Load summary confidence data if available
             global_iptm = None
             global_ptm = None
@@ -227,6 +240,7 @@ class IntelliFoldReader(BaseReader):
         """
         ca_residues = []
         cb_residues = []
+        seen_ligand_residues = {}  # (chain_id, residue_name) -> True
 
         atomsitefield_dict = {}
         atomsitefield_num = 0
@@ -250,6 +264,25 @@ class IntelliFoldReader(BaseReader):
                     # Track chain order
                     if atom['chain_id'] not in chain_order:
                         chain_order.append(atom['chain_id'])
+
+                    if atom.get('is_ligand', False):
+                        # Ligand atom: one representative per (chain, residue_name)
+                        lig_key = (atom['chain_id'], atom['residue_name'])
+                        if lig_key not in seen_ligand_residues:
+                            # First non-hydrogen atom of this ligand
+                            if atom['atom_name'][0] != 'H':
+                                seen_ligand_residues[lig_key] = True
+                                entry = {
+                                    'coor': np.array([atom['x'], atom['y'], atom['z']]),
+                                    'res': atom['residue_name'],
+                                    'chainid': atom['chain_id'],
+                                    'resnum': atom['residue_seq_num'],
+                                    'plddt': atom.get('b_factor', 0.0),
+                                    'is_ligand': True,
+                                }
+                                ca_residues.append(entry)
+                                cb_residues.append(entry)
+                        continue
 
                     # CA atoms (or C1' for nucleic acids)
                     if atom['atom_name'] == "CA" or "C1" in atom['atom_name']:
@@ -288,9 +321,18 @@ class IntelliFoldReader(BaseReader):
             return None
 
         try:
-            residue_seq_num = linelist[fielddict['label_seq_id']]
-            if residue_seq_num == ".":
-                return None  # Ligand atom
+            residue_seq_num_str = linelist[fielddict['label_seq_id']]
+            is_ligand = residue_seq_num_str == "."
+
+            if is_ligand:
+                # Ligand atom: use auth_seq_id for residue number
+                if 'auth_seq_id' in fielddict:
+                    auth_seq_str = linelist[fielddict['auth_seq_id']]
+                    residue_seq_num = int(auth_seq_str) if auth_seq_str != "." else 1
+                else:
+                    residue_seq_num = 1
+            else:
+                residue_seq_num = int(residue_seq_num_str)
 
             # Get chain ID
             chain_id = linelist[fielddict['label_asym_id']]
@@ -300,11 +342,12 @@ class IntelliFoldReader(BaseReader):
                 'atom_name': linelist[fielddict['label_atom_id']],
                 'residue_name': linelist[fielddict['label_comp_id']],
                 'chain_id': chain_id,
-                'residue_seq_num': int(residue_seq_num),
+                'residue_seq_num': residue_seq_num,
                 'x': float(linelist[fielddict['Cartn_x']]),
                 'y': float(linelist[fielddict['Cartn_y']]),
                 'z': float(linelist[fielddict['Cartn_z']]),
                 'b_factor': float(linelist[fielddict['B_iso_or_equiv']]) if 'B_iso_or_equiv' in fielddict else 0.0,
+                'is_ligand': is_ligand,
             }
         except (ValueError, IndexError, KeyError):
             return None

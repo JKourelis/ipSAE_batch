@@ -163,6 +163,28 @@ class Boltz2Reader(BaseReader):
                 pde_data = np.load(pde_file)
                 pde_matrix = pde_data['pde']
 
+            # Handle dimension mismatch if confidence data doesn't include ligand tokens
+            if plddt.shape[0] != num_residues:
+                is_ligand_mask = np.array([r.get('is_ligand', False) for r in ca_residues])
+                polymer_indices = np.where(~is_ligand_mask)[0]
+
+                if plddt.shape[0] == len(polymer_indices):
+                    # Confidence data only covers polymer residues - pad for ligands
+                    plddt_full = np.zeros(num_residues)
+                    plddt_full[polymer_indices] = plddt
+                    plddt = plddt_full
+
+                    pae_full = np.full((num_residues, num_residues), 30.0)
+                    pae_full[np.ix_(polymer_indices, polymer_indices)] = pae_matrix
+                    pae_matrix = pae_full
+
+                    if pde_matrix is not None:
+                        pde_full = np.full((num_residues, num_residues), 30.0)
+                        pde_full[np.ix_(polymer_indices, polymer_indices)] = pde_matrix
+                        pde_matrix = pde_full
+                else:
+                    print(f"  Warning: pLDDT dimension ({plddt.shape[0]}) != residue count ({num_residues})")
+
             # Load confidence data from JSON if available
             global_iptm = None
             global_ptm = None
@@ -257,6 +279,7 @@ class Boltz2Reader(BaseReader):
         """
         ca_residues = []
         cb_residues = []
+        seen_ligand_residues = {}  # (chain_id, residue_name) -> True
 
         atomsitefield_dict = {}
         atomsitefield_num = 0
@@ -280,6 +303,25 @@ class Boltz2Reader(BaseReader):
                     # Track chain order
                     if atom['chain_id'] not in chain_order:
                         chain_order.append(atom['chain_id'])
+
+                    if atom.get('is_ligand', False):
+                        # Ligand atom: one representative per (chain, residue_name)
+                        lig_key = (atom['chain_id'], atom['residue_name'])
+                        if lig_key not in seen_ligand_residues:
+                            # First non-hydrogen atom of this ligand
+                            if atom['atom_name'][0] != 'H':
+                                seen_ligand_residues[lig_key] = True
+                                entry = {
+                                    'coor': np.array([atom['x'], atom['y'], atom['z']]),
+                                    'res': atom['residue_name'],
+                                    'chainid': atom['chain_id'],
+                                    'resnum': atom['residue_seq_num'],
+                                    'plddt': atom.get('b_factor', 0.0),
+                                    'is_ligand': True,
+                                }
+                                ca_residues.append(entry)
+                                cb_residues.append(entry)
+                        continue
 
                     # CA atoms (or C1' for nucleic acids)
                     if atom['atom_name'] == "CA" or "C1" in atom['atom_name']:
@@ -314,9 +356,18 @@ class Boltz2Reader(BaseReader):
             return None
 
         try:
-            residue_seq_num = linelist[fielddict['label_seq_id']]
-            if residue_seq_num == ".":
-                return None  # Ligand atom
+            residue_seq_num_str = linelist[fielddict['label_seq_id']]
+            is_ligand = residue_seq_num_str == "."
+
+            if is_ligand:
+                # Ligand atom: use auth_seq_id for residue number
+                if 'auth_seq_id' in fielddict:
+                    auth_seq_str = linelist[fielddict['auth_seq_id']]
+                    residue_seq_num = int(auth_seq_str) if auth_seq_str != "." else 1
+                else:
+                    residue_seq_num = 1
+            else:
+                residue_seq_num = int(residue_seq_num_str)
 
             # Get chain ID - Boltz2 uses longer chain names
             chain_id = linelist[fielddict['label_asym_id']]
@@ -326,11 +377,12 @@ class Boltz2Reader(BaseReader):
                 'atom_name': linelist[fielddict['label_atom_id']],
                 'residue_name': linelist[fielddict['label_comp_id']],
                 'chain_id': chain_id,
-                'residue_seq_num': int(residue_seq_num),
+                'residue_seq_num': residue_seq_num,
                 'x': float(linelist[fielddict['Cartn_x']]),
                 'y': float(linelist[fielddict['Cartn_y']]),
                 'z': float(linelist[fielddict['Cartn_z']]),
                 'b_factor': float(linelist[fielddict['B_iso_or_equiv']]) if 'B_iso_or_equiv' in fielddict else 0.0,
+                'is_ligand': is_ligand,
             }
         except (ValueError, IndexError, KeyError):
             return None
