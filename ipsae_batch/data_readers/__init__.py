@@ -6,6 +6,9 @@ Supported backends:
 - colabfold: ColabFold/AlphaFold2-multimer (PDB + JSON)
 - boltz2: Boltz2 (CIF + NPZ + JSON)
 - intellifold: IntelliFold (CIF + JSON, AF3-like format)
+- protenix: Protenix (CIF + JSON, AF3-like format)
+- openfold3: OpenFold3 (CIF + JSON, PDE-as-PAE symmetric)
+- chai1: Chai-1 (CIF + NPZ, requires PAE NPZ)
 
 Auto-detection:
 The backend can be automatically detected from file patterns using detect_backend().
@@ -75,6 +78,21 @@ def _import_readers():
 
     try:
         from . import intellifold
+    except ImportError:
+        pass
+
+    try:
+        from . import protenix
+    except ImportError:
+        pass
+
+    try:
+        from . import openfold3
+    except ImportError:
+        pass
+
+    try:
+        from . import chai1
     except ImportError:
         pass
 
