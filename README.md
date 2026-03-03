@@ -10,7 +10,7 @@ Combines **ipSAE** interaction metrics with visualization **inspired by AlphaBri
 
 This tool is **inspired by** [ipSAE](https://doi.org/10.1101/2025.02.10.637595) and [AlphaBridge](https://doi.org/10.1101/2024.10.23.619601), but with significant underlying changes:
 
-1. **Multi-backend support**: Unlike AlphaBridge (AF3 only), this implementation works across AlphaFold3, ColabFold/AF2, Boltz2, and IntelliFold.
+1. **Multi-backend support**: Unlike AlphaBridge (AF3 only), this implementation works across AlphaFold3, ColabFold/AF2, Boltz2, IntelliFold, Protenix, OpenFold3, and Chai-1.
 
 2. **Calculated contact probabilities**: Since only AF3 provides native contact probabilities, we calculate `contact_prob` from PAE and distance for all backends using: `contact_prob = (1 - pae/31.75) * distance_weight`. Results may differ slightly from native AF3 contact_probs.
 
@@ -29,6 +29,9 @@ The backend is **automatically detected** by default based on file patterns. You
 | ColabFold | `--backend colabfold` | ColabFold/AF2 multimer outputs |
 | Boltz2 | `--backend boltz2` | Boltz2 prediction outputs |
 | IntelliFold | `--backend intellifold` | IntelliFold server outputs |
+| Protenix | `--backend protenix` | Protenix prediction outputs |
+| OpenFold3 | `--backend openfold3` | OpenFold3 prediction outputs |
+| Chai-1 | `--backend chai1` | Chai-1 prediction outputs (requires PAE export) |
 
 ### Backend Auto-Detection
 
@@ -37,11 +40,14 @@ When `--backend auto` is used (default), the backend is detected from file patte
 | Backend | Detection Pattern |
 |---------|------------------|
 | **Boltz2** | NPZ files present: `plddt_*.npz` AND `pae_*.npz` |
+| **Chai-1** | `pred.model_idx_*.cif` AND `scores.model_idx_*.npz` |
 | **ColabFold** | PDB files with `_rank_` pattern AND `*_scores_rank_*.json` |
-| **IntelliFold** | CIF files with `_sample-` pattern AND `*_confidences.json` |
+| **OpenFold3** | CIF files ending `_model.cif` AND `*_confidences.json` |
+| **Protenix** | CIF files with `_sample_` (underscore) AND `*_summary_confidence_sample_*.json` |
+| **IntelliFold** | CIF files with `_sample-` (dash) AND `*_confidences.json` |
 | **AlphaFold3** | CIF files with `_model_` pattern AND `*_full_data_*.json` AND `*_summary_confidences_*.json` |
 
-Detection priority: Boltz2 > ColabFold > IntelliFold > AlphaFold3
+Detection priority: Boltz2 > Chai-1 > ColabFold > OpenFold3 > Protenix > IntelliFold > AlphaFold3
 
 To override auto-detection, specify the backend explicitly: `--backend colabfold`
 
