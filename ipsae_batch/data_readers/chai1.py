@@ -163,15 +163,57 @@ class Chai1Reader(BaseReader):
             # pLDDT from CIF B-factors (already per-residue, 0-100 scale)
             plddt = np.array([res['plddt'] for res in ca_residues])
 
-            # Handle dimension mismatch if PAE doesn't include ligand tokens
+            # Handle dimension mismatch between PAE tokens and CIF residues.
+            # Chai-1 PAE is per-token: each protein residue = 1 token, each
+            # ligand ATOM = 1 token. But the CIF parser collapses each ligand
+            # into 1 representative entry. So PAE can be larger than num_residues
+            # when ligands are present (e.g., ADP: 27 non-H atoms = 27 tokens,
+            # 1 CIF entry).
+            #
+            # Strategy: polymer tokens are first (1:1 with polymer residues),
+            # ligand atom tokens follow. Keep one token per ligand CIF entry
+            # (the first), discard the rest.
             if pae_matrix.shape[0] != num_residues:
                 is_ligand_mask = np.array([r.get('is_ligand', False) for r in ca_residues])
                 polymer_indices = np.where(~is_ligand_mask)[0]
+                n_polymer = len(polymer_indices)
+                n_ligand_entries = int(np.sum(is_ligand_mask))
 
-                if pae_matrix.shape[0] == len(polymer_indices):
+                if pae_matrix.shape[0] == n_polymer:
+                    # PAE only covers polymer residues - pad for ligands
                     pae_full = np.full((num_residues, num_residues), 30.0)
                     pae_full[np.ix_(polymer_indices, polymer_indices)] = pae_matrix
                     pae_matrix = pae_full
+
+                elif pae_matrix.shape[0] > num_residues and n_ligand_entries > 0:
+                    # PAE has more tokens than CIF residues — ligand atoms are
+                    # expanded (1 token per atom) but CIF collapses them to 1 entry.
+                    # Token order: polymer tokens first, then ligand atom tokens.
+                    n_tokens = pae_matrix.shape[0]
+                    n_ligand_tokens = n_tokens - n_polymer
+                    # Build keep mask: keep all polymer tokens, then keep only
+                    # the first token for each ligand CIF entry.
+                    keep = np.ones(n_tokens, dtype=bool)
+
+                    if n_ligand_entries == 1:
+                        # Single ligand: keep first token, discard rest
+                        keep[n_polymer + 1:] = False
+                    else:
+                        # Multiple ligand entries: count non-H atoms per ligand
+                        # from CIF to determine token block sizes.
+                        ligand_atom_counts = self._count_ligand_atoms(
+                            Path(model_info['structure_file']))
+                        offset = n_polymer
+                        for count in ligand_atom_counts:
+                            # Keep first token of this ligand group
+                            keep[offset + 1:offset + count] = False
+                            offset += count
+
+                    if np.sum(keep) == num_residues:
+                        pae_matrix = pae_matrix[np.ix_(keep, keep)]
+                    else:
+                        print(f"  Warning: PAE token trim failed: expected {num_residues}, got {np.sum(keep)}")
+
                 else:
                     print(f"  Warning: PAE dimension ({pae_matrix.shape[0]}) != residue count ({num_residues})")
 
@@ -351,3 +393,42 @@ class Chai1Reader(BaseReader):
             }
         except (ValueError, IndexError, KeyError):
             return None
+
+    def _count_ligand_atoms(self, cif_file: Path) -> List[int]:
+        """Count non-H atoms per ligand entry in CIF, in chain order.
+
+        Returns a list with one count per unique (chain_id, residue_name)
+        ligand group, preserving the order they appear in the CIF file.
+        This matches the token order in the PAE matrix.
+        """
+        atomsitefield_dict = {}
+        atomsitefield_num = 0
+        ligand_groups = []  # ordered list of (chain_id, residue_name)
+        ligand_counts = {}  # (chain_id, residue_name) -> non-H atom count
+
+        with open(cif_file, 'r') as f:
+            for line in f:
+                if line.startswith("_atom_site."):
+                    _, fieldname = line.strip().split(".")
+                    atomsitefield_dict[fieldname] = atomsitefield_num
+                    atomsitefield_num += 1
+                elif line.startswith("ATOM") or line.startswith("HETATM"):
+                    linelist = line.split()
+                    try:
+                        seq_id = linelist[atomsitefield_dict['label_seq_id']]
+                        if seq_id != ".":
+                            continue
+                        atom_name = linelist[atomsitefield_dict['label_atom_id']]
+                        if atom_name[0] == 'H':
+                            continue
+                        chain_id = linelist[atomsitefield_dict['label_asym_id']]
+                        comp_id = linelist[atomsitefield_dict['label_comp_id']]
+                        key = (chain_id, comp_id)
+                        if key not in ligand_counts:
+                            ligand_groups.append(key)
+                            ligand_counts[key] = 0
+                        ligand_counts[key] += 1
+                    except (KeyError, IndexError):
+                        continue
+
+        return [ligand_counts[g] for g in ligand_groups]

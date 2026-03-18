@@ -201,26 +201,70 @@ class ProtenixReader(BaseReader):
             # pLDDT from CIF B-factors (already per-residue, 0-100 scale)
             plddt = np.array([res['plddt'] for res in ca_residues])
 
-            # Handle dimension mismatch if PAE doesn't include ligand tokens
+            # Handle dimension mismatch between PAE tokens and CIF residues.
+            # Protenix PAE is per-token: each protein residue = 1 token, each
+            # ligand ATOM = 1 token. But the CIF parser collapses each ligand
+            # into 1 representative entry. So PAE can be larger than num_residues
+            # when ligands are present (e.g., ATP: 31 atoms = 31 tokens, 1 CIF entry).
+            #
+            # Strategy: use token_asym_id to build a per-token mask that keeps
+            # one token per CIF residue (polymer tokens 1:1, first ligand token
+            # per chain kept, rest discarded). Then trim PAE/PDE/contact_probs.
             if pae_matrix.shape[0] != num_residues:
                 is_ligand_mask = np.array([r.get('is_ligand', False) for r in ca_residues])
                 polymer_indices = np.where(~is_ligand_mask)[0]
+                n_polymer = len(polymer_indices)
 
-                if pae_matrix.shape[0] == len(polymer_indices):
+                if pae_matrix.shape[0] == n_polymer:
                     # PAE only covers polymer residues - pad for ligands
                     pae_full = np.full((num_residues, num_residues), 30.0)
                     pae_full[np.ix_(polymer_indices, polymer_indices)] = pae_matrix
                     pae_matrix = pae_full
 
-                    if pde_matrix is not None and pde_matrix.shape[0] == len(polymer_indices):
+                    if pde_matrix is not None and pde_matrix.shape[0] == n_polymer:
                         pde_full = np.full((num_residues, num_residues), 30.0)
                         pde_full[np.ix_(polymer_indices, polymer_indices)] = pde_matrix
                         pde_matrix = pde_full
 
-                    if contact_probs is not None and contact_probs.shape[0] == len(polymer_indices):
+                    if contact_probs is not None and contact_probs.shape[0] == n_polymer:
                         cp_full = np.full((num_residues, num_residues), 0.0)
                         cp_full[np.ix_(polymer_indices, polymer_indices)] = contact_probs
                         contact_probs = cp_full
+
+                elif pae_matrix.shape[0] > num_residues:
+                    # PAE has more tokens than CIF residues — ligand atoms are
+                    # expanded (1 token per atom) but CIF collapses them to 1 entry.
+                    # Use token_asym_id to identify which tokens to keep.
+                    token_asym_id = conf_data.get('token_asym_id')
+                    if token_asym_id is not None:
+                        token_asym_id = np.array(token_asym_id)
+                        # Build keep mask: for polymer chains keep all tokens (1:1
+                        # with residues), for ligand chains keep only the first token.
+                        n_tokens = len(token_asym_id)
+                        keep = np.ones(n_tokens, dtype=bool)
+                        seen_ligand_chains = set()
+                        for i in range(n_tokens):
+                            chain_idx = int(token_asym_id[i])
+                            # Check if this token belongs to a ligand chain by
+                            # checking if it's beyond the polymer token range
+                            if i >= n_polymer:
+                                if chain_idx not in seen_ligand_chains:
+                                    seen_ligand_chains.add(chain_idx)
+                                    keep[i] = True  # first token = representative
+                                else:
+                                    keep[i] = False
+                            # else: polymer token, already True
+
+                        if np.sum(keep) == num_residues:
+                            pae_matrix = pae_matrix[np.ix_(keep, keep)]
+                            if pde_matrix is not None and pde_matrix.shape[0] == n_tokens:
+                                pde_matrix = pde_matrix[np.ix_(keep, keep)]
+                            if contact_probs is not None and contact_probs.shape[0] == n_tokens:
+                                contact_probs = contact_probs[np.ix_(keep, keep)]
+                        else:
+                            print(f"  Warning: PAE dimension ({pae_matrix.shape[0]}) != residue count ({num_residues}), token_mask sum={np.sum(keep)}")
+                    else:
+                        print(f"  Warning: PAE dimension ({pae_matrix.shape[0]}) > residue count ({num_residues}), no token_asym_id available")
                 else:
                     print(f"  Warning: PAE dimension ({pae_matrix.shape[0]}) != residue count ({num_residues})")
 
@@ -384,7 +428,8 @@ class ProtenixReader(BaseReader):
 
         try:
             residue_seq_num_str = linelist[fielddict['label_seq_id']]
-            is_ligand = residue_seq_num_str == "."
+            group_pdb = linelist[fielddict['group_PDB']] if 'group_PDB' in fielddict else ''
+            is_ligand = residue_seq_num_str == "." or group_pdb == "HETATM"
 
             if is_ligand:
                 if 'auth_seq_id' in fielddict:
