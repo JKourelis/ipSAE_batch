@@ -163,13 +163,17 @@ class Boltz2Reader(BaseReader):
                 pde_data = np.load(pde_file)
                 pde_matrix = pde_data['pde']
 
-            # Handle dimension mismatch if confidence data doesn't include ligand tokens
+            # Handle dimension mismatch between confidence data and structure
+            # Boltz2 confidence matrices may include per-atom ligand tokens that
+            # don't correspond to residues in the parsed structure (where each
+            # ligand is collapsed to a single representative entry).
             if plddt.shape[0] != num_residues:
                 is_ligand_mask = np.array([r.get('is_ligand', False) for r in ca_residues])
                 polymer_indices = np.where(~is_ligand_mask)[0]
+                n_polymer = len(polymer_indices)
 
-                if plddt.shape[0] == len(polymer_indices):
-                    # Confidence data only covers polymer residues - pad for ligands
+                if plddt.shape[0] == n_polymer:
+                    # Confidence data only covers polymer residues — pad for ligands
                     plddt_full = np.zeros(num_residues)
                     plddt_full[polymer_indices] = plddt
                     plddt = plddt_full
@@ -182,6 +186,17 @@ class Boltz2Reader(BaseReader):
                         pde_full = np.full((num_residues, num_residues), 30.0)
                         pde_full[np.ix_(polymer_indices, polymer_indices)] = pde_matrix
                         pde_matrix = pde_full
+
+                elif plddt.shape[0] > num_residues:
+                    # Confidence data includes per-atom ligand tokens — trim to
+                    # match the structure by keeping only the first num_residues
+                    # entries (polymer residues come first in Boltz2 output, then
+                    # ligand atom tokens are appended).
+                    plddt = plddt[:num_residues]
+                    pae_matrix = pae_matrix[:num_residues, :num_residues]
+                    if pde_matrix is not None:
+                        pde_matrix = pde_matrix[:num_residues, :num_residues]
+
                 else:
                     print(f"  Warning: pLDDT dimension ({plddt.shape[0]}) != residue count ({num_residues})")
 
